@@ -156,7 +156,7 @@ class DataThread(QThread):
             if new_value:
                 new_value = current_value | 1 << self.bit
             else:
-                new_value = current_value & 1 << self.bit
+                new_value = current_value & 0 << self.bit
 
         message = tcp.write_multiple_registers(slave_id=self.slave_id, starting_address=self.addr, values=[int(new_value)])
         response = self.server.send_message(message)
