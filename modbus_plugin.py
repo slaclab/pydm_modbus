@@ -58,6 +58,16 @@ class ModbusServer:
         except Exception as ex:
             logger.error('Error connecting to socket. {}'.format(str(ex)))
 
+    def disconnect(self):
+        if not self.connected:
+            return
+
+        try:
+            self.sock.close()
+            self.connected = False
+        except Exception as ex:
+            logger.error('Error disconnecting from socket. {}'.format(str(ex)))
+
     def send_message(self, message):
         self.mutex.lock()
         response = None
@@ -124,6 +134,7 @@ class DataThread(QThread):
             self.msleep(int(self.poll_interval*1000))
 
     def write(self, new_value):
+        print ("Write!")
         self.write_data(new_value)
 
     def read_hr(self):
@@ -312,7 +323,8 @@ class Connection(PyDMConnection):
 
     def close(self):
         self.data_thread.requestInterruption()
-        self.data_thread.terminate()
+        self.data_thread.server.disconnect()
+        #self.data_thread.terminate()
 
 
 class ModbusPlugin(PyDMPlugin):

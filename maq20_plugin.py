@@ -10,20 +10,14 @@ from pydm.utilities import is_pydm_app
 from maq20 import MAQ20
 
 
-
-
-#print (system.find("S0115278-06"))
-
-#print(system)
-
 logger = logging.getLogger(__name__)
 
 
-class ModbusServer:
+class Maq20Server:
     sock_cache = {}
 
     def __init__(self, ip, port):
-        if self.make_hash(ip, port) in ModbusServer.sock_cache:
+        if self.make_hash(ip, port) in Maq20Server.sock_cache:
             return
         self.ip = ip
         self.port = port
@@ -36,20 +30,28 @@ class ModbusServer:
         self.alive_timer.setInterval(1000)
         self.alive_timer.timeout.connect(self.check_alive)
         self.alive_timer.start()
-        ModbusServer.sock_cache[self.make_hash(ip, port)] = self
+        Maq20Server.sock_cache[self.make_hash(ip, port)] = self
 
     def __new__(cls, ip, port):
-        obj_hash = ModbusServer.make_hash(ip, port)
+        obj_hash = Maq20Server.make_hash(ip, port)
         if obj_hash in cls.sock_cache:
-            return ModbusServer.sock_cache[obj_hash]
+            return Maq20Server.sock_cache[obj_hash]
         else:
-            server = super(ModbusServer, cls).__new__(cls)
+            server = super(Maq20Server, cls).__new__(cls)
             return server
 
     def check_alive(self):
         self.alive_timer.stop()
+
         if not self.connected:
+            print("Try Connect" )
             self.connect()
+        self.mutex.lock()
+        try:
+            self.system.scan_module_list()
+        except:
+            pass
+        self.mutex.unlock()
         self.alive_timer.start()
 
     def connect(self):
@@ -59,9 +61,19 @@ class ModbusServer:
         try:
             self.system = MAQ20(ip_address=self.ip, port=self.port)
             self.connected = True
-            #print (self.system)
         except Exception as ex:
-            logger.error('Error connecting to socket. {}'.format(str(ex)))
+            logger.error('Error connecting to Maq20. {}'.format(str(ex)))
+
+    def disconnect(self):
+        if not self.connected:
+            return
+
+        try:
+            self.system = None
+            self.connected = False
+        except Exception as ex:
+            logger.error('Error disconnecting from Maq20. {}'.format(str(ex)))
+
 
     def __hash__(self):
         return self.make_hash(self.ip, self.port)
@@ -80,41 +92,46 @@ class ModbusServer:
 class DataThread(QThread):
     new_data_signal = pyqtSignal([float], [int], [str])
 
-    def __init__(self, ip, port, slave_id, addr, poll_interval=0.1):
+    def __init__(self, ip, port, module, addr, poll_interval=0.1):
         super(QThread, self).__init__()
         self.ip = ip
         self.port = port
-        self.slave_id = slave_id
+        self.module_name = module
+        self.module = None
         self.addr = addr
         self.poll_interval = poll_interval
 
-        self.server = ModbusServer(self.ip, self.port)
-
-
+        self.server = Maq20Server(self.ip, self.port)
 
     def run(self):
         while not self.isInterruptionRequested():
-            data = self.read_data()
-            if data is not None:
-                self.new_data_signal.emit(data)
+            if self.server.connected:
+                    data = self.read_data()
+                    if data is not None:
+                        self.new_data_signal.emit(data)
             self.msleep(int(self.poll_interval*1000))
 
     def write(self, new_value):
-        self.write_data(new_value)
+        if self.server.connected:
+            self.write_data(new_value)
 
     def read_data(self):
-        module = self.server.system.find(self.slave_id)
         self.server.mutex.lock()
         try:
-            if module.get_name() in ["MAQ20-DORLY20  "] or not module.has_range_information():
+            module = self.server.system.find(self.module_name)
+            if not module.has_range_information():
                 response = module.read_channel_data_counts(int(self.addr))
             else:
-
-           #     module.load_ranges_information()
                 module.load_channel_active_ranges()
                 response = module.read_channel_data(int(self.addr))
-
-
+            self.module = module
+        except:
+            self.module = None
+            response = None
+            try:
+                self.server.system.time()
+            except:
+                self.server.connected = False
         finally:
             self.server.mutex.unlock()
 
@@ -125,13 +142,19 @@ class DataThread(QThread):
 
 
     def write_data(self, new_value):
-        module = self.server.system.find(self.slave_id)
         self.server.mutex.lock()
         try:
-            if module.get_name() in ["MAQ20-DORLY20  "] or not module.has_range_information():
+            module = self.server.system.find(self.moduel_name)
+            if not module.has_range_information():
                 module.write_register(1000+int(self.addr),new_value)
             else:
-                response = module.write_channel_data(int(self.addr),new_value)
+                module.write_channel_data(int(self.addr),new_value)
+        except:
+            self.module = None
+            try:
+                self.server.system.time()
+            except:
+                self.server.connected = False
         finally:
             self.server.mutex.unlock()
 
@@ -179,10 +202,8 @@ class Connection(PyDMConnection):
         if len(data_data) < 2:
             raise ValueError("Invalid Address. The format must be: {}".format(self.ADDRESS_FORMAT))
 
-        print (data_data)
         self.slave_id = data_data[0]
         self.addr = data_data[1]
-
 
         # Check if we have polling defined
         if len(data) > 2:
@@ -190,7 +211,7 @@ class Connection(PyDMConnection):
 
     def emit_metadata(self):
         self.emit_access_state()
-        self.emit_connection_state(self.data_thread.server.connected)
+        self.emit_connection_state(self.data_thread.server.connected and self.data_thread.module is not None )
 
     @pyqtSlot(int)
     @pyqtSlot(float)
@@ -272,7 +293,9 @@ class Connection(PyDMConnection):
 
     def close(self):
         self.data_thread.requestInterruption()
-        self.data_thread.terminate()
+        self.data_thread.server.disconnect()
+#        self.data_thread.terminate()
+
 
 
 class ModbusPlugin(PyDMPlugin):
