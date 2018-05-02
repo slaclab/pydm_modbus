@@ -12,10 +12,11 @@ from umodbus.client import tcp
 logger = logging.getLogger(__name__)
 
 
-class ModbusServer:
+class ModbusServer(QThread):
     sock_cache = {}
 
     def __init__(self, ip, port):
+        super(QThread, self).__init__()
         if self.make_hash(ip, port) in ModbusServer.sock_cache:
             return
         self.ip = ip
@@ -25,10 +26,7 @@ class ModbusServer:
         self.mutex = QMutex()
         self.connected = False
         self.connect()
-        self.alive_timer = QTimer()
-        self.alive_timer.setInterval(1000)
-        self.alive_timer.timeout.connect(self.check_alive)
-        self.alive_timer.start()
+        self.start()
         ModbusServer.sock_cache[self.make_hash(ip, port)] = self
 
     def __new__(cls, ip, port):
@@ -39,11 +37,14 @@ class ModbusServer:
             server = super(ModbusServer, cls).__new__(cls)
             return server
 
-    def check_alive(self):
-        self.alive_timer.stop()
-        if not self.connected:
-            self.connect()
-        self.alive_timer.start()
+    def run(self):
+
+        while not self.isInterruptionRequested():
+            if not self.connected:
+                self.mutex.lock()
+                self.connect()
+                self.mutex.unlock()
+            self.sleep(1)
 
     def connect(self):
         if self.connected:
@@ -323,6 +324,7 @@ class Connection(PyDMConnection):
 
     def close(self):
         self.data_thread.requestInterruption()
+        self.data_thread.server.requestInterruption()
         self.data_thread.server.disconnect()
         #self.data_thread.terminate()
 

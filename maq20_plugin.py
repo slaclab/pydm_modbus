@@ -13,10 +13,11 @@ from maq20 import MAQ20
 logger = logging.getLogger(__name__)
 
 
-class Maq20Server:
+class Maq20Server(QThread):
     sock_cache = {}
 
     def __init__(self, ip, port):
+        super(QThread, self).__init__()
         if self.make_hash(ip, port) in Maq20Server.sock_cache:
             return
         self.ip = ip
@@ -26,10 +27,7 @@ class Maq20Server:
         self.mutex = QMutex()
         self.connected = False
         self.connect()
-        self.alive_timer = QTimer()
-        self.alive_timer.setInterval(1000)
-        self.alive_timer.timeout.connect(self.check_alive)
-        self.alive_timer.start()
+        self.start()
         Maq20Server.sock_cache[self.make_hash(ip, port)] = self
 
     def __new__(cls, ip, port):
@@ -40,19 +38,14 @@ class Maq20Server:
             server = super(Maq20Server, cls).__new__(cls)
             return server
 
-    def check_alive(self):
-        self.alive_timer.stop()
+    def run(self):
 
-        if not self.connected:
-            print("Try Connect" )
-            self.connect()
-        self.mutex.lock()
-        try:
-            self.system.scan_module_list()
-        except:
-            pass
-        self.mutex.unlock()
-        self.alive_timer.start()
+        while not self.isInterruptionRequested():
+            if not self.connected:
+                self.mutex.lock()
+                self.connect()
+                self.mutex.unlock()
+            self.sleep(1)
 
     def connect(self):
         if self.connected:
@@ -292,6 +285,7 @@ class Connection(PyDMConnection):
         super(Connection, self).remove_listener(channel)
 
     def close(self):
+        self.data_thread.server.requestInterruption()
         self.data_thread.requestInterruption()
         self.data_thread.server.disconnect()
 #        self.data_thread.terminate()
