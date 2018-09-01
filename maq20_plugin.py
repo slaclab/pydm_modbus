@@ -23,7 +23,7 @@ class Maq20Server(QThread):
         self.ip = ip
         self.port = port
         self.system = None
-        logger.info("Will open server at: {}:{}".format(self.ip, self.port))
+        logger.info("Will open MAQ20 server at: {}:{}".format(self.ip, self.port))
         self.mutex = QMutex()
         self.connected = False
         self.connect()
@@ -52,10 +52,12 @@ class Maq20Server(QThread):
             return
 
         try:
+            self.system = None
             self.system = MAQ20(ip_address=self.ip, port=self.port)
             self.connected = True
+            logger.info("Connected to MAQ20 server at: {}:{}".format(self.ip, self.port))
         except Exception as ex:
-            logger.error('Error connecting to Maq20. {}'.format(str(ex)))
+            logger.error('Error connecting to MAQ20. {}'.format(str(ex)))
 
     def disconnect(self):
         if not self.connected:
@@ -65,7 +67,7 @@ class Maq20Server(QThread):
             self.system = None
             self.connected = False
         except Exception as ex:
-            logger.error('Error disconnecting from Maq20. {}'.format(str(ex)))
+            logger.error('Error disconnecting from MAQ20. {}'.format(str(ex)))
 
 
     def __hash__(self):
@@ -89,7 +91,11 @@ class DataThread(QThread):
         super(QThread, self).__init__()
         self.ip = ip
         self.port = port
-        self.module_name = module
+
+        if module.find('S') != 0:
+            module = "S"+module
+        self.module_sn = module
+
         self.module = None
         self.addr = addr
         self.poll_interval = poll_interval
@@ -110,14 +116,19 @@ class DataThread(QThread):
 
     def read_data(self):
         self.server.mutex.lock()
+
         try:
-            module = self.server.system.find(self.module_name)
-            if not module.has_range_information():
-                response = module.read_channel_data_counts(int(self.addr))
+            if self.module is None:
+                print(self.module, self.ip, self.module_sn, self.addr)
+
+                self.module = self.server.system.find(self.module_sn)
+
+            if not self.module.has_range_information():
+                response = self.module.read_channel_data_counts(int(self.addr))
             else:
-                module.load_channel_active_ranges()
-                response = module.read_channel_data(int(self.addr))
-            self.module = module
+                self.module.load_channel_active_ranges()
+                response = self.module.read_channel_data(int(self.addr))
+
         except:
             self.module = None
             response = None
@@ -137,11 +148,12 @@ class DataThread(QThread):
     def write_data(self, new_value):
         self.server.mutex.lock()
         try:
-            module = self.server.system.find(self.moduel_name)
-            if not module.has_range_information():
-                module.write_register(1000+int(self.addr),new_value)
+            if self.module is None:
+                self.module = self.server.system.find(self.module_sn)
+            if not self.module.has_range_information():
+                self.module.write_register(1000+int(self.addr),new_value)
             else:
-                module.write_channel_data(int(self.addr),new_value)
+                self.module.write_channel_data(int(self.addr),new_value)
         except:
             self.module = None
             try:
@@ -153,7 +165,7 @@ class DataThread(QThread):
 
 
 class Connection(PyDMConnection):
-    ADDRESS_FORMAT = "modbus://<ip>:<port>/<slave_id>:<address>/<polling|0.1>"
+    ADDRESS_FORMAT = "maq20://<ip>:<port>/<module_sn>:<address>/<polling|0.1>"
 
     def __init__(self, channel, address, protocol=None, parent=None):
         super(Connection, self).__init__(channel, address, protocol, parent)
@@ -163,7 +175,7 @@ class Connection(PyDMConnection):
         self.server = None
         self.ip = '127.0.0.1'
         self.port = '502'
-        self.slave_id = 0
+        self.module_sn = 0
         self.addr = 0
         self.poll = 0.1  # 100 ms
 
@@ -171,7 +183,7 @@ class Connection(PyDMConnection):
 
         self.add_listener(channel)
 
-        self.data_thread = DataThread(self.ip, self.port, self.slave_id, self.addr,
+        self.data_thread = DataThread(self.ip, self.port, self.module_sn, self.addr,
                                    self.poll)
         self.data_thread.new_data_signal.connect(self.emit_data, Qt.QueuedConnection)
         self.data_thread.start()
@@ -182,7 +194,6 @@ class Connection(PyDMConnection):
         self.metadata_timer.start()
 
     def parse_address(self, address):
-
 
         data = address.split("/")
         # Parse IP and Port
@@ -195,7 +206,7 @@ class Connection(PyDMConnection):
         if len(data_data) < 2:
             raise ValueError("Invalid Address. The format must be: {}".format(self.ADDRESS_FORMAT))
 
-        self.slave_id = data_data[0]
+        self.module_sn = data_data[0]
         self.addr = data_data[1]
 
         # Check if we have polling defined

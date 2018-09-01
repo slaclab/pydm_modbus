@@ -22,7 +22,7 @@ class ModbusServer(QThread):
         self.ip = ip
         self.port = port
         self.sock = None
-        logger.info("Will open server at: {}:{}".format(self.ip, self.port))
+        logger.info("Will open MODBUS server at: {}:{}".format(self.ip, self.port))
         self.mutex = QMutex()
         self.connected = False
         self.connect()
@@ -51,13 +51,19 @@ class ModbusServer(QThread):
             return
 
         try:
+            try:
+                self.sock.close()
+            except:
+                pass
+
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.sock.settimeout(0.5)
             self.sock.connect((self.ip, self.port))
             self.connected = True
+            logger.info("Connected to MODBUS server at: {}:{}".format(self.ip, self.port))
         except Exception as ex:
-            logger.error('Error connecting to socket. {}'.format(str(ex)))
+            logger.error('Error connecting to MODBUS. {}'.format(str(ex)))
 
     def disconnect(self):
         if not self.connected:
@@ -67,7 +73,7 @@ class ModbusServer(QThread):
             self.sock.close()
             self.connected = False
         except Exception as ex:
-            logger.error('Error disconnecting from socket. {}'.format(str(ex)))
+            logger.error('Error disconnecting from MODBUS. {}'.format(str(ex)))
 
     def send_message(self, message):
         self.mutex.lock()
