@@ -1,11 +1,9 @@
 import logging
-import socket
 import numpy as np
 
+from pydm.data_plugins import is_read_only
 from pydm.data_plugins.plugin import PyDMPlugin, PyDMConnection
-from pydm.PyQt.QtCore import pyqtSignal, pyqtSlot, Qt, QThread, QTimer, QMutex
-from pydm.PyQt.QtGui import QApplication
-from pydm.utilities import is_pydm_app
+from qtpy.QtCore import Signal, Slot, Qt, QThread, QTimer, QMutex
 
 from maq20 import MAQ20
 
@@ -114,7 +112,7 @@ class Maq20Server(QThread):
 
 
 class DataThread(QThread):
-    new_data_signal = pyqtSignal([float], [int], [str])
+    new_data_signal = Signal([float], [int], [str])
 
     def __init__(self, ip, port, module, addr, poll_interval=0.1):
         super(QThread, self).__init__()
@@ -153,11 +151,11 @@ class DataThread(QThread):
 
         try:
             if self.module is None:
-                print("read",self.module, self.ip, self.module_sn, self.addr)
+                print("read", self.module, self.ip, self.module_sn, self.addr)
 
                 self.module = self.server.system.find(self.module_sn)
 
-            if str(self.addr).find('r')==0:
+            if str(self.addr).find('r') == 0:
                 addr = str(self.addr).replace("r",'')
                 response = self.module.read_register(int(addr))
             else:
@@ -182,14 +180,12 @@ class DataThread(QThread):
         else:
             return None
 
-
     def write_data(self, new_value):
         self.server.mutexW.lock()
         try:
             if self.moduleW is None:
                 self.moduleW = self.server.systemW.find(self.module_sn)
                 print("Write",self.moduleW, self.ip, self.module_sn, self.addr)
-
 
             if str(self.addr).find('r') == 0:
                 print("reg")
@@ -218,7 +214,6 @@ class Connection(PyDMConnection):
 
     def __init__(self, channel, address, protocol=None, parent=None):
         super(Connection, self).__init__(channel, address, protocol, parent)
-        self.app = QApplication.instance()
 
         # Default Values
         self.server = None
@@ -232,9 +227,10 @@ class Connection(PyDMConnection):
 
         self.add_listener(channel)
 
-        self.data_thread = DataThread(self.ip, self.port, self.module_sn, self.addr,
-                                   self.poll)
-        self.data_thread.new_data_signal.connect(self.emit_data, Qt.QueuedConnection)
+        self.data_thread = DataThread(self.ip, self.port, self.module_sn,
+                                      self.addr, self.poll)
+        self.data_thread.new_data_signal.connect(self.emit_data,
+                                                 Qt.QueuedConnection)
         self.data_thread.start()
 
         self.metadata_timer = QTimer()
@@ -266,16 +262,16 @@ class Connection(PyDMConnection):
         self.emit_access_state()
         self.emit_connection_state(self.data_thread.server.connected and self.data_thread.module is not None )
 
-    @pyqtSlot(int)
-    @pyqtSlot(float)
-    @pyqtSlot(str)
-    @pyqtSlot(bool)
+    @Slot(int)
+    @Slot(float)
+    @Slot(str)
+    @Slot(bool)
     def emit_data(self, new_data):
         if new_data is not None:
             self.new_value_signal[type(new_data)].emit(new_data)
 
     def emit_access_state(self):
-        if is_pydm_app() and self.app.is_read_only():
+        if is_read_only():
             self.write_access_signal.emit(False)
             return
 
@@ -287,12 +283,12 @@ class Connection(PyDMConnection):
         else:
             self.connection_state_signal.emit(False)
 
-    @pyqtSlot(int)
-    @pyqtSlot(float)
-    @pyqtSlot(str)
-    @pyqtSlot(np.ndarray)
+    @Slot(int)
+    @Slot(float)
+    @Slot(str)
+    @Slot(np.ndarray)
     def put_value(self, new_val):
-        if is_pydm_app() and self.app.is_read_only():
+        if is_read_only():
             return
 
         try:
@@ -322,27 +318,6 @@ class Connection(PyDMConnection):
                 channel.value_signal[np.ndarray].connect(self.put_value, Qt.QueuedConnection)
             except KeyError:
                 pass
-
-    def remove_listener(self, channel):
-        if channel.value_signal is not None:
-            try:
-                channel.value_signal[str].disconnect(self.put_value)
-            except KeyError:
-                pass
-            try:
-                channel.value_signal[int].disconnect(self.put_value)
-            except KeyError:
-                pass
-            try:
-                channel.value_signal[float].disconnect(self.put_value)
-            except KeyError:
-                pass
-            try:
-                channel.value_signal[np.ndarray].disconnect(self.put_value)
-            except KeyError:
-                pass
-
-        super(Connection, self).remove_listener(channel)
 
     def close(self):
         self.data_thread.server.requestInterruption()

@@ -2,10 +2,10 @@ import logging
 import socket
 import numpy as np
 
+from pydm.data_plugins import is_read_only
 from pydm.data_plugins.plugin import PyDMPlugin, PyDMConnection
-from pydm.PyQt.QtCore import pyqtSignal, pyqtSlot, Qt, QThread, QTimer, QMutex
-from pydm.PyQt.QtGui import QApplication
-from pydm.utilities import is_pydm_app
+from qtpy.QtCore import Signal, Slot, Qt, QThread, QTimer, QMutex
+from qtpy.QtWidgets import QApplication
 
 from umodbus.client import tcp
 
@@ -47,7 +47,6 @@ class ModbusServer(QThread):
             self.sleep(1)
 
     def connect(self):
-        print (self.connected)
         if self.connected:
             return
 
@@ -109,7 +108,7 @@ class ModbusServer(QThread):
 
 
 class DataThread(QThread):
-    new_data_signal = pyqtSignal([float], [int], [str])
+    new_data_signal = Signal([float], [int], [str])
 
     def __init__(self, ip, port, slave_id, designator, addr, length, bit, poll_interval=0.1):
         super(QThread, self).__init__()
@@ -160,18 +159,16 @@ class DataThread(QThread):
                         return 1
                     else:
                         return 0
-                return (get_bit(response[0],self.bit))
-
+                return get_bit(response[0],self.bit)
         else:
             return None
-
 
     def write_hr(self, new_value):
 
         if self.bit is not None:
             message = tcp.read_holding_registers(slave_id=self.slave_id, starting_address=self.addr, quantity=1)
             response = self.server.send_message(message)
-            current_value =response[0]
+            current_value = response[0]
 
             if new_value:
                 new_value = current_value | 1 << self.bit
@@ -188,7 +185,6 @@ class Connection(PyDMConnection):
 
     def __init__(self, channel, address, protocol=None, parent=None):
         super(Connection, self).__init__(channel, address, protocol, parent)
-        self.app = QApplication.instance()
 
         # Default Values
         self.server = None
@@ -252,16 +248,16 @@ class Connection(PyDMConnection):
         self.emit_access_state()
         self.emit_connection_state(self.data_thread.server.connected)
 
-    @pyqtSlot(int)
-    @pyqtSlot(float)
-    @pyqtSlot(str)
-    @pyqtSlot(bool)
+    @Slot(int)
+    @Slot(float)
+    @Slot(str)
+    @Slot(bool)
     def emit_data(self, new_data):
         if new_data is not None:
             self.new_value_signal[type(new_data)].emit(new_data)
 
     def emit_access_state(self):
-        if is_pydm_app() and self.app.is_read_only():
+        if is_read_only():
             self.write_access_signal.emit(False)
             return
 
@@ -273,12 +269,12 @@ class Connection(PyDMConnection):
         else:
             self.connection_state_signal.emit(False)
 
-    @pyqtSlot(int)
-    @pyqtSlot(float)
-    @pyqtSlot(str)
-    @pyqtSlot(np.ndarray)
+    @Slot(int)
+    @Slot(float)
+    @Slot(str)
+    @Slot(np.ndarray)
     def put_value(self, new_val):
-        if is_pydm_app() and self.app.is_read_only():
+        if is_read_only():
             return
 
         try:
@@ -308,27 +304,6 @@ class Connection(PyDMConnection):
                 channel.value_signal[np.ndarray].connect(self.put_value, Qt.QueuedConnection)
             except KeyError:
                 pass
-
-    def remove_listener(self, channel):
-        if channel.value_signal is not None:
-            try:
-                channel.value_signal[str].disconnect(self.put_value)
-            except KeyError:
-                pass
-            try:
-                channel.value_signal[int].disconnect(self.put_value)
-            except KeyError:
-                pass
-            try:
-                channel.value_signal[float].disconnect(self.put_value)
-            except KeyError:
-                pass
-            try:
-                channel.value_signal[np.ndarray].disconnect(self.put_value)
-            except KeyError:
-                pass
-
-        super(Connection, self).remove_listener(channel)
 
     def close(self):
         self.data_thread.requestInterruption()
