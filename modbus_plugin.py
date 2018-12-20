@@ -5,7 +5,6 @@ import numpy as np
 from pydm.data_plugins import is_read_only
 from pydm.data_plugins.plugin import PyDMPlugin, PyDMConnection
 from qtpy.QtCore import Signal, Slot, Qt, QThread, QTimer, QMutex
-from qtpy.QtWidgets import QApplication
 
 from umodbus.client import tcp
 
