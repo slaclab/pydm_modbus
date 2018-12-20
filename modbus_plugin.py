@@ -47,6 +47,7 @@ class ModbusServer(QThread):
             self.sleep(1)
 
     def connect(self):
+        print (self.connected)
         if self.connected:
             return
 
@@ -64,6 +65,7 @@ class ModbusServer(QThread):
             logger.info("Connected to MODBUS server at: {}:{}".format(self.ip, self.port))
         except Exception as ex:
             logger.error('Error connecting to MODBUS. {}'.format(str(ex)))
+        print(self.connected)
 
     def disconnect(self):
         if not self.connected:

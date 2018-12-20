@@ -27,6 +27,11 @@ class Maq20Server(QThread):
         self.mutex = QMutex()
         self.connected = False
         self.connect()
+
+        self.mutexW = QMutex()
+        self.connectedW = False
+        self.connectW()
+
         self.start()
         Maq20Server.sock_cache[self.make_hash(ip, port)] = self
 
@@ -45,6 +50,12 @@ class Maq20Server(QThread):
                 self.mutex.lock()
                 self.connect()
                 self.mutex.unlock()
+
+            if not self.connectedW:
+                self.mutexW.lock()
+                self.connectW()
+                self.mutexW.unlock()
+
             self.sleep(1)
 
     def connect(self):
@@ -59,6 +70,18 @@ class Maq20Server(QThread):
         except Exception as ex:
             logger.error('Error connecting to MAQ20. {}'.format(str(ex)))
 
+    def connectW(self):
+        if self.connectedW:
+            return
+
+        try:
+            self.systemW = None
+            self.systemW = MAQ20(ip_address=self.ip, port=self.port)
+            self.connectedW = True
+            logger.info("Connected to MAQ20 W server at: {}:{}".format(self.ip, self.port))
+        except Exception as ex:
+            logger.error('Error connecting to W MAQ20. {}'.format(str(ex)))
+
     def disconnect(self):
         if not self.connected:
             return
@@ -67,7 +90,13 @@ class Maq20Server(QThread):
             self.system = None
             self.connected = False
         except Exception as ex:
-            logger.error('Error disconnecting from MAQ20. {}'.format(str(ex)))
+            logger.error('Error disconnecting from MAQ20 read socket. {}'.format(str(ex)))
+
+        try:
+            self.W = None
+            self.connectedW = False
+        except Exception as ex:
+            logger.error('Error disconnecting from MAQ20 write socket. {}'.format(str(ex)))
 
 
     def __hash__(self):
@@ -97,6 +126,7 @@ class DataThread(QThread):
         self.module_sn = module
 
         self.module = None
+        self.moduleW = None
         self.addr = addr
         self.poll_interval = poll_interval
 
@@ -104,11 +134,15 @@ class DataThread(QThread):
 
     def run(self):
         while not self.isInterruptionRequested():
-            if self.server.connected:
-                    data = self.read_data()
-                    if data is not None:
-                        self.new_data_signal.emit(data)
+            self.update_data()
+
             self.msleep(int(self.poll_interval*1000))
+
+    def update_data(self):
+        if self.server.connected:
+            data = self.read_data()
+            if data is not None:
+                self.new_data_signal.emit(data)
 
     def write(self, new_value):
         if self.server.connected:
@@ -119,15 +153,19 @@ class DataThread(QThread):
 
         try:
             if self.module is None:
-                print(self.module, self.ip, self.module_sn, self.addr)
+                print("read",self.module, self.ip, self.module_sn, self.addr)
 
                 self.module = self.server.system.find(self.module_sn)
 
-            if not self.module.has_range_information():
-                response = self.module.read_channel_data_counts(int(self.addr))
+            if str(self.addr).find('r')==0:
+                addr = str(self.addr).replace("r",'')
+                response = self.module.read_register(int(addr))
             else:
-                self.module.load_channel_active_ranges()
-                response = self.module.read_channel_data(int(self.addr))
+                if not self.module.has_range_information():
+                    response = self.module.read_channel_data_counts(int(self.addr))
+                else:
+                    self.module.load_channel_active_ranges()
+                    response = self.module.read_channel_data(int(self.addr))
 
         except:
             self.module = None
@@ -146,22 +184,33 @@ class DataThread(QThread):
 
 
     def write_data(self, new_value):
-        self.server.mutex.lock()
+        self.server.mutexW.lock()
         try:
-            if self.module is None:
-                self.module = self.server.system.find(self.module_sn)
-            if not self.module.has_range_information():
-                self.module.write_register(1000+int(self.addr),new_value)
+            if self.moduleW is None:
+                self.moduleW = self.server.systemW.find(self.module_sn)
+                print("Write",self.moduleW, self.ip, self.module_sn, self.addr)
+
+
+            if str(self.addr).find('r') == 0:
+                print("reg")
+                addr = str(self.addr).replace("r", '')
+                response = self.module.write_register(int(addr),new_value)
+
             else:
-                self.module.write_channel_data(int(self.addr),new_value)
+                if not self.moduleW.has_range_information():
+                    self.moduleW.write_register(1000+int(self.addr),new_value)
+                else:
+                    self.moduleW.write_channel_data(int(self.addr),new_value)
         except:
-            self.module = None
+            self.moduleW = None
             try:
-                self.server.system.time()
+                self.server.systemW.time()
             except:
-                self.server.connected = False
+                self.server.connectedW = False
         finally:
-            self.server.mutex.unlock()
+            self.server.mutexW.unlock()
+
+            self.update_data()
 
 
 class Connection(PyDMConnection):
@@ -177,7 +226,7 @@ class Connection(PyDMConnection):
         self.port = '502'
         self.module_sn = 0
         self.addr = 0
-        self.poll = 0.1  # 100 ms
+        self.poll = 1  # 2 s
 
         self.parse_address(address)
 
